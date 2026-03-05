@@ -39,8 +39,8 @@ object WaterRepository {
             val obj = json.getJSONObject(i)
             if (obj.getLong("day") != day) updated.put(obj)
         }
-        updated.put(JSONObject().put("day", day).put("ml", ml))
-        // Keep only the most recent 30 entries
+        updated.put(JSONObject().put("day", day).put("ml", ml).put("fake", false))
+        // Keep only the most recent 37 entries
         val trimmed = JSONArray()
         val start = maxOf(0, updated.length() - 37)
         for (i in start until updated.length()) {
@@ -78,12 +78,39 @@ object WaterRepository {
         val p = prefs(context)
         val today = LocalDate.now().toEpochDay()
         val random = java.util.Random()
-        val json = JSONArray()
-        for (daysAgo in 36 downTo 1) {
-            val ml = 1500 + random.nextInt(1751) // 1500..3250
-            json.put(JSONObject().put("day", today - daysAgo).put("ml", ml))
+        // Build a set of days that already have real (fake=false) entries
+        val existing = JSONArray(p.getString(KEY_HISTORY, "[]") ?: "[]")
+        val realDays = mutableSetOf<Long>()
+        for (i in 0 until existing.length()) {
+            val obj = existing.getJSONObject(i)
+            if (!obj.optBoolean("fake", false)) realDays.add(obj.getLong("day"))
         }
-        p.edit().putString(KEY_HISTORY, json.toString()).apply()
+        // Keep all existing entries, add fake entries only for days without real data
+        val updated = JSONArray()
+        for (i in 0 until existing.length()) updated.put(existing.getJSONObject(i))
+        for (daysAgo in 36 downTo 1) {
+            val day = today - daysAgo
+            if (day !in realDays) {
+                val ml = 1500 + random.nextInt(1751) // 1500..3250
+                updated.put(JSONObject().put("day", day).put("ml", ml).put("fake", true))
+            }
+        }
+        p.edit().putString(KEY_HISTORY, updated.toString()).apply()
+    }
+
+    fun clearFakeData(context: Context) {
+        val p = prefs(context)
+        val json = JSONArray(p.getString(KEY_HISTORY, "[]") ?: "[]")
+        val kept = JSONArray()
+        for (i in 0 until json.length()) {
+            val obj = json.getJSONObject(i)
+            if (!obj.optBoolean("fake", false)) kept.put(obj)
+        }
+        p.edit().putString(KEY_HISTORY, kept.toString()).apply()
+    }
+
+    fun clearAllData(context: Context) {
+        prefs(context).edit().clear().apply()
     }
 
     fun addWater(context: Context, ml: Int): Int {

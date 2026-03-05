@@ -62,6 +62,7 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
 
     private var currentMl by mutableIntStateOf(0)
+    private var historyVersion by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,13 +82,37 @@ class MainActivity : ComponentActivity() {
                     AlertDialog(
                         onDismissRequest = { showDevDialog = false },
                         title = { Text("Developer Mode") },
-                        text = { Text("Fill the last 36 days with random test data?") },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                WaterRepository.generateTestData(this@MainActivity)
-                                showDevDialog = false
-                            }) { Text("Generate") }
+                        text = {
+                            Column {
+                                TextButton(
+                                    onClick = {
+                                        WaterRepository.generateTestData(this@MainActivity)
+                                        historyVersion++
+                                        showDevDialog = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Generate test data (skip real days)") }
+                                TextButton(
+                                    onClick = {
+                                        WaterRepository.clearFakeData(this@MainActivity)
+                                        historyVersion++
+                                        showDevDialog = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Clear fake data only") }
+                                TextButton(
+                                    onClick = {
+                                        WaterRepository.clearAllData(this@MainActivity)
+                                        currentMl = 0
+                                        historyVersion++
+                                        updateWidget()
+                                        showDevDialog = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("⚠ Clear ALL data") }
+                            }
                         },
+                        confirmButton = {},
                         dismissButton = {
                             TextButton(onClick = { showDevDialog = false }) { Text("Cancel") }
                         }
@@ -206,6 +231,7 @@ class MainActivity : ComponentActivity() {
 
                     WaterChart(
                         currentMl = currentMl,
+                        historyVersion = historyVersion,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(160.dp)
@@ -252,14 +278,15 @@ private fun smoothPath(points: List<Offset>): Path {
 }
 
 @Composable
-private fun WaterChart(currentMl: Int, modifier: Modifier = Modifier) {
+private fun WaterChart(currentMl: Int, historyVersion: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val textMeasurer = rememberTextMeasurer()
     val blue = Color(0xFF2196F3)
 
     // Last 7 days: index 0 = oldest, index 6 = today
     // Also compute the 30-day rolling average *before* each visible day for the trend line
-    val (chartData, rollingAverages) = remember(currentMl) {
+    // historyVersion is included as a key so the cache invalidates after generate/clear operations
+    val (chartData, rollingAverages) = remember(currentMl, historyVersion) {
         val historyMap = WaterRepository.getHistory(context).toMap()
         val today = LocalDate.now().toEpochDay()
         val data = (6 downTo 0).map { daysAgo ->
@@ -273,8 +300,8 @@ private fun WaterChart(currentMl: Int, modifier: Modifier = Modifier) {
         Pair(data, averages)
     }
 
-    // X-axis day labels for the same 7 days
-    val dayLabels: List<String> = remember(currentMl) {
+    // X-axis day labels — only depend on the current date, not history
+    val dayLabels: List<String> = remember {
         val today = LocalDate.now()
         (6 downTo 0).map { daysAgo ->
             DAY_LABELS[today.minusDays(daysAgo.toLong()).dayOfWeek.value - 1]
@@ -314,25 +341,53 @@ private fun WaterChart(currentMl: Int, modifier: Modifier = Modifier) {
             strokeWidth = 1.dp.toPx()
         )
 
-        // Goal reference line (dashed, faint blue)
-        drawLine(
-            color = blue.copy(alpha = 0.25f),
-            start = Offset(chartLeft, chartTop),
-            end = Offset(chartRight, chartTop),
-            strokeWidth = 1.dp.toPx(),
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
-        )
+        // Horizontal grid lines and Y-axis labels at every 1L interval
+        val maxLiters = (maxValue / 1000f).toInt()
+        for (liters in 0..maxLiters) {
+            val y = chartBottom - (liters * 1000f / maxValue) * chartHeight
+            // Grid line (skip 0 — the baseline already covers it)
+            if (liters > 0) {
+                drawLine(
+                    color = Color.DarkGray.copy(alpha = 0.7f),
+                    start = Offset(chartLeft, y),
+                    end = Offset(chartRight, y),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+            // Label
+            val label = if (liters == 0) "0" else "${liters}L"
+            val measured = textMeasurer.measure(label, style = labelStyle)
+            drawText(
+                textMeasurer = textMeasurer,
+                text = label,
+                topLeft = Offset(
+                    chartLeft - measured.size.width - 4.dp.toPx(),
+                    y - measured.size.height / 2f
+                ),
+                style = labelStyle
+            )
+        }
 
-        // Bars
+        // Bars with rounded top corners
+        val cornerR = 6.dp.toPx()
         chartData.forEachIndexed { i, ml ->
+            if (ml <= 0) return@forEachIndexed
             val slotCenter = chartLeft + slotWidth * i + slotWidth / 2f
+            val barLeft = slotCenter - barWidth / 2f
+            val barRight = slotCenter + barWidth / 2f
             val barHeight = (ml.toFloat() / maxValue) * chartHeight
             val barTop = chartBottom - barHeight
-            drawRect(
-                color = blue,
-                topLeft = Offset(slotCenter - barWidth / 2f, barTop),
-                size = Size(barWidth, barHeight.coerceAtLeast(0f))
-            )
+            val r = cornerR.coerceAtMost(barHeight / 2f).coerceAtMost(barWidth / 2f)
+            val barPath = Path().apply {
+                moveTo(barLeft, chartBottom)
+                lineTo(barLeft, barTop + r)
+                quadraticBezierTo(barLeft, barTop, barLeft + r, barTop)
+                lineTo(barRight - r, barTop)
+                quadraticBezierTo(barRight, barTop, barRight, barTop + r)
+                lineTo(barRight, chartBottom)
+                close()
+            }
+            drawPath(barPath, color = blue)
         }
 
         // 30-day rolling average line (one point per visible day)
@@ -368,27 +423,5 @@ private fun WaterChart(currentMl: Int, modifier: Modifier = Modifier) {
             )
         }
 
-        // Y-axis labels: 0 at bottom, goal at top
-        val zeroLayout = textMeasurer.measure("0", style = labelStyle)
-        drawText(
-            textMeasurer = textMeasurer,
-            text = "0",
-            topLeft = Offset(
-                chartLeft - zeroLayout.size.width - 4.dp.toPx(),
-                chartBottom - zeroLayout.size.height / 2f
-            ),
-            style = labelStyle
-        )
-        val maxLabel = String.format(Locale.US, "%.1fL", maxValue / 1000f)
-        val goalLayout = textMeasurer.measure(maxLabel, style = labelStyle)
-        drawText(
-            textMeasurer = textMeasurer,
-            text = maxLabel,
-            topLeft = Offset(
-                chartLeft - goalLayout.size.width - 4.dp.toPx(),
-                chartTop - goalLayout.size.height / 2f
-            ),
-            style = labelStyle
-        )
     }
 }
