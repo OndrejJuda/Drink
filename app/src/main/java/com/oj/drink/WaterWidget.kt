@@ -14,6 +14,8 @@ import android.graphics.Path
 import android.graphics.Typeface
 import android.widget.RemoteViews
 import java.util.Locale
+import kotlin.math.sin
+import kotlin.math.PI
 
 class WaterWidget : AppWidgetProvider() {
 
@@ -85,34 +87,58 @@ class WaterWidget : AppWidgetProvider() {
         val cx = size / 2f
         val cy = size / 2f
         val radius = (size / 2f - 6f) * 0.9f
+        val left = cx - radius
+        val right = cx + radius
+        val bottom = cy + radius
+        val waterTopY = bottom - 2f * radius * progress
 
-        // Dark circle background
+        // Dark navy background
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#1C1C1E")
+            color = Color.parseColor("#0D1B2A")
         }
         canvas.drawCircle(cx, cy, radius, bgPaint)
 
-        // Clip to circle, draw water fill from the bottom
+        // Clip everything to circle
         val clipPath = Path().apply {
             addCircle(cx, cy, radius, Path.Direction.CW)
         }
         canvas.save()
         canvas.clipPath(clipPath)
 
-        val fillHeight = size * progress
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#2196F3")
-        }
-        canvas.drawRect(0f, size - fillHeight, size.toFloat(), size.toFloat(), fillPaint)
-        canvas.restore()
+        if (progress > 0f) {
+            // Helper: build filled wave path at given baseline y and phase offset
+            fun wavePath(baseY: Float, phase: Float): Path {
+                val waveAmp = radius * 0.07f
+                val waveLen = radius * 1.5f
+                val steps = 60
+                return Path().apply {
+                    moveTo(left, bottom)
+                    for (step in 0..steps) {
+                        val x = left + (right - left) * step / steps
+                        val y = baseY + waveAmp * sin(2.0 * PI * ((x - left) / waveLen + phase)).toFloat()
+                        lineTo(x, y)
+                    }
+                    lineTo(right, bottom)
+                    close()
+                }
+            }
 
-        // Circle outline
-        val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#2196F3")
-            style = Paint.Style.STROKE
-            strokeWidth = 6f
+            // Back wave: lighter blue, 40% opacity
+            val backPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.parseColor("#42A5F5")
+                alpha = (0.40f * 255).toInt()
+            }
+            canvas.drawPath(wavePath(waterTopY, 0.0f), backPaint)
+
+            // Front wave: deeper blue, 70% opacity, half-wavelength offset + slightly higher
+            val frontPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.parseColor("#1565C0")
+                alpha = (0.70f * 255).toInt()
+            }
+            canvas.drawPath(wavePath(waterTopY - radius * 0.06f, 0.5f), frontPaint)
         }
-        canvas.drawCircle(cx, cy, radius, outlinePaint)
+
+        canvas.restore()
 
         // Centered text showing amount in liters
         val text = String.format(Locale.US, "%.1fL", currentMl / 1000f)

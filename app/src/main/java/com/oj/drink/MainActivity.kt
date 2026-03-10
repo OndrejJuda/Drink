@@ -6,8 +6,15 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -58,15 +66,19 @@ import androidx.compose.ui.unit.sp
 import com.oj.drink.ui.theme.DrinkTheme
 import java.time.LocalDate
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
 
     private var currentMl by mutableIntStateOf(0)
     private var historyVersion by mutableIntStateOf(0)
+    private var currentStreak by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         currentMl = WaterRepository.getCurrentMl(this)
+        currentStreak = WaterRepository.getStreak(this)
         setContent {
             DrinkTheme {
                 val goal = WaterRepository.DAILY_GOAL_ML
@@ -77,6 +89,22 @@ class MainActivity : ComponentActivity() {
                 var devTapCount by remember { mutableStateOf(0) }
                 var devLastTapMs by remember { mutableStateOf(0L) }
                 var showDevDialog by remember { mutableStateOf(false) }
+
+                val waveTransition = rememberInfiniteTransition(label = "wave")
+                val wave1Phase by waveTransition.animateFloat(
+                    initialValue = 0f, targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(3000, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ), label = "w1"
+                )
+                val wave2Phase by waveTransition.animateFloat(
+                    initialValue = 1f, targetValue = 0f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(3500, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ), label = "w2"
+                )
 
                 if (showDevDialog) {
                     AlertDialog(
@@ -136,27 +164,70 @@ class MainActivity : ComponentActivity() {
                             val radius = minOf(size.width, size.height) / 2f - 6f
                             val cx = size.width / 2f
                             val cy = size.height / 2f
+                            val left = cx - radius
+                            val right = cx + radius
+                            val bottom = cy + radius
+                            // Water surface baseline (y decreases upward on screen)
+                            val waterTopY = bottom - 2f * radius * progress
+                            val waveAmp = 6.dp.toPx()
+                            val waveLen = radius * 1.5f
 
-                            drawCircle(color = dark, radius = radius, center = Offset(cx, cy))
+                            // Dark background
+                            drawCircle(
+                                color = Color(0xFF0D1B2A),
+                                radius = radius,
+                                center = Offset(cx, cy)
+                            )
 
                             val circlePath = Path().apply {
                                 addOval(Rect(cx - radius, cy - radius, cx + radius, cy + radius))
                             }
                             clipPath(circlePath) {
-                                val fillHeight = size.height * progress
-                                drawRect(
-                                    color = blue,
-                                    topLeft = Offset(0f, size.height - fillHeight),
-                                    size = Size(size.width, fillHeight)
+                                if (progress > 0f) {
+                                    // Helper: build a filled wave path
+                                    // baseY = equilibrium surface, phase = 0..1 horizontal shift
+                                    fun waveFill(baseY: Float, phase: Float): Path = Path().apply {
+                                        moveTo(left, bottom)
+                                        for (step in 0..80) {
+                                            val x = left + (right - left) * step / 80f
+                                            val y = baseY + waveAmp * sin(
+                                                2.0 * PI * ((x - left) / waveLen + phase)
+                                            ).toFloat()
+                                            if (step == 0) lineTo(x, y) else lineTo(x, y)
+                                        }
+                                        lineTo(right, bottom)
+                                        close()
+                                    }
+
+                                    // Layer 1 — back wave: lighter blue, 40% alpha, moving right
+                                    drawPath(
+                                        path = waveFill(waterTopY, wave1Phase),
+                                        color = Color(0xFF42A5F5).copy(alpha = 0.40f)
+                                    )
+
+                                    // Layer 2 — front wave: deeper blue, 70% alpha,
+                                    // half-wavelength offset + 5dp higher, moving left
+                                    drawPath(
+                                        path = waveFill(waterTopY - 5.dp.toPx(), wave2Phase + 0.5f),
+                                        color = Color(0xFF1565C0).copy(alpha = 0.70f)
+                                    )
+                                }
+
+                                // Specular highlight — top-left
+                                val hlCx = cx - radius * 0.30f
+                                val hlCy = cy - radius * 0.38f
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(Color.White.copy(alpha = 0.28f), Color.Transparent),
+                                        center = Offset(hlCx, hlCy),
+                                        radius = radius * 0.40f
+                                    ),
+                                    radius = radius * 0.40f,
+                                    center = Offset(hlCx, hlCy)
                                 )
                             }
 
-                            drawCircle(
-                                color = blue,
-                                radius = radius,
-                                center = Offset(cx, cy),
-                                style = Stroke(width = 6f)
-                            )
+
                         }
 
                         // Large value exactly at circle center
@@ -186,6 +257,35 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                         )
+
+                        // Streak badge — overlaps top-right edge of circle
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .align(Alignment.TopEnd)
+                                .offset(x = (-12).dp, y = 12.dp)
+                                .background(Color(0xFF1C1C1E), CircleShape)
+                                .border(
+                                    width = 2.dp,
+                                    color = if (currentStreak > 0) Color(0xFFFF6D00) else Color.DarkGray,
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text("🔥", fontSize = 13.sp, lineHeight = 14.sp)
+                                Text(
+                                    text = "$currentStreak",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(32.dp))
@@ -196,12 +296,14 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Button(onClick = {
                             currentMl = WaterRepository.addWater(this@MainActivity, 100)
+                            currentStreak = WaterRepository.getStreak(this@MainActivity)
                             updateWidget()
                         }) {
                             Text("+100ml")
                         }
                         Button(onClick = {
                             currentMl = WaterRepository.addWater(this@MainActivity, 250)
+                            currentStreak = WaterRepository.getStreak(this@MainActivity)
                             updateWidget()
                         }) {
                             Text("+250ml")
@@ -209,6 +311,7 @@ class MainActivity : ComponentActivity() {
                         Button(
                             onClick = {
                                 currentMl = WaterRepository.resetToday(this@MainActivity)
+                                currentStreak = WaterRepository.getStreak(this@MainActivity)
                                 updateWidget()
                             },
                             modifier = Modifier.size(44.dp),
@@ -244,6 +347,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         currentMl = WaterRepository.getCurrentMl(this)
+        currentStreak = WaterRepository.getStreak(this)
     }
 
     private fun updateWidget() {

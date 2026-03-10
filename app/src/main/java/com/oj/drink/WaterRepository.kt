@@ -11,6 +11,8 @@ object WaterRepository {
     private const val KEY_WATER_ML = "water_ml"
     private const val KEY_DATE = "date"
     private const val KEY_HISTORY = "history"
+    private const val KEY_STREAK = "streak"
+    private const val KEY_STREAK_COUNTED_TODAY = "streak_counted_today"
     const val DAILY_GOAL_ML = 3000
 
     private fun prefs(context: Context): SharedPreferences =
@@ -20,13 +22,23 @@ object WaterRepository {
         val today = LocalDate.now().toEpochDay()
         val savedDay = prefs.getLong(KEY_DATE, -1L)
         if (savedDay != today) {
+            val editor = prefs.edit()
             if (savedDay != -1L) {
                 val ml = prefs.getInt(KEY_WATER_ML, 0)
                 saveToHistory(prefs, savedDay, ml)
+                // Streak was already incremented intra-day when the goal was crossed.
+                // At rollover we only need to reset it if the final intake missed the goal
+                // or if more than one day passed (user skipped days).
+                val daysPassed = today - savedDay
+                if (daysPassed > 1L || ml < DAILY_GOAL_ML) {
+                    editor.putInt(KEY_STREAK, 0)
+                }
+                // If ml >= DAILY_GOAL_ML and daysPassed == 1: streak is already correct.
             }
-            prefs.edit()
+            editor
                 .putInt(KEY_WATER_ML, 0)
                 .putLong(KEY_DATE, today)
+                .putBoolean(KEY_STREAK_COUNTED_TODAY, false)
                 .apply()
         }
     }
@@ -64,13 +76,26 @@ object WaterRepository {
         return p.getInt(KEY_WATER_ML, 0)
     }
 
+    fun getStreak(context: Context): Int {
+        val p = prefs(context)
+        checkAndResetIfNeeded(p)
+        return p.getInt(KEY_STREAK, 0)
+    }
+
     fun resetToday(context: Context): Int {
         val p = prefs(context)
         val today = LocalDate.now().toEpochDay()
-        p.edit()
+        val editor = p.edit()
             .putInt(KEY_WATER_ML, 0)
             .putLong(KEY_DATE, today)
-            .apply()
+        // If the goal was reached today, decrement the streak since we're resetting below it
+        if (p.getBoolean(KEY_STREAK_COUNTED_TODAY, false)) {
+            val streak = p.getInt(KEY_STREAK, 0)
+            editor
+                .putInt(KEY_STREAK, maxOf(0, streak - 1))
+                .putBoolean(KEY_STREAK_COUNTED_TODAY, false)
+        }
+        editor.apply()
         return 0
     }
 
@@ -119,10 +144,18 @@ object WaterRepository {
         val current = p.getInt(KEY_WATER_ML, 0)
         val newValue = current + ml
         val today = LocalDate.now().toEpochDay()
-        p.edit()
+        val editor = p.edit()
             .putInt(KEY_WATER_ML, newValue)
             .putLong(KEY_DATE, today)
-            .apply()
+        // Increment streak the first time the goal is crossed today
+        if (current < DAILY_GOAL_ML && newValue >= DAILY_GOAL_ML &&
+            !p.getBoolean(KEY_STREAK_COUNTED_TODAY, false)
+        ) {
+            editor
+                .putInt(KEY_STREAK, p.getInt(KEY_STREAK, 0) + 1)
+                .putBoolean(KEY_STREAK_COUNTED_TODAY, true)
+        }
+        editor.apply()
         return newValue
     }
 }
