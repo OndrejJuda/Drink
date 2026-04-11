@@ -13,7 +13,7 @@ object WaterRepository {
     private const val KEY_HISTORY = "history"
     private const val KEY_STREAK = "streak"
     private const val KEY_STREAK_COUNTED_TODAY = "streak_counted_today"
-    const val DAILY_GOAL_ML = 3000
+    const val DAILY_GOAL_ML = 2000
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
