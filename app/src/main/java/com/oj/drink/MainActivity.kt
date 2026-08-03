@@ -15,20 +15,23 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -40,22 +43,24 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -71,20 +76,26 @@ import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
 
-    private var currentMl by mutableIntStateOf(0)
-    private var historyVersion by mutableIntStateOf(0)
+    /** Day currently being logged into. Always reset to today when the app comes forward. */
+    private var selectedDay by mutableLongStateOf(WaterRepository.today())
+    private var selectedMl by mutableIntStateOf(0)
     private var currentStreak by mutableIntStateOf(0)
+
+    /** Bumped after every write so the chart's cached data recomputes. */
+    private var dataVersion by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        currentMl = WaterRepository.getCurrentMl(this)
-        currentStreak = WaterRepository.getStreak(this)
+        refresh()
         setContent {
             DrinkTheme {
                 val goal = WaterRepository.DAILY_GOAL_ML
-                val blue = Color(0xFF2196F3)
                 val dark = Color(0xFF1C1C1E)
-                val progress = (currentMl.toFloat() / goal).coerceIn(0f, 1f)
+                val progress = (selectedMl.toFloat() / goal).coerceIn(0f, 1f)
+
+                val today = WaterRepository.today()
+                val lastIndex = WaterRepository.VISIBLE_DAYS - 1
+                val selectedIndex = (lastIndex - (today - selectedDay)).toInt().coerceIn(0, lastIndex)
 
                 var devTapCount by remember { mutableStateOf(0) }
                 var devLastTapMs by remember { mutableStateOf(0L) }
@@ -115,7 +126,7 @@ class MainActivity : ComponentActivity() {
                                 TextButton(
                                     onClick = {
                                         WaterRepository.generateTestData(this@MainActivity)
-                                        historyVersion++
+                                        refresh()
                                         showDevDialog = false
                                     },
                                     modifier = Modifier.fillMaxWidth()
@@ -123,7 +134,7 @@ class MainActivity : ComponentActivity() {
                                 TextButton(
                                     onClick = {
                                         WaterRepository.clearFakeData(this@MainActivity)
-                                        historyVersion++
+                                        refresh()
                                         showDevDialog = false
                                     },
                                     modifier = Modifier.fillMaxWidth()
@@ -131,8 +142,8 @@ class MainActivity : ComponentActivity() {
                                 TextButton(
                                     onClick = {
                                         WaterRepository.clearAllData(this@MainActivity)
-                                        currentMl = 0
-                                        historyVersion++
+                                        selectedDay = WaterRepository.today()
+                                        refresh()
                                         updateWidget()
                                         showDevDialog = false
                                     },
@@ -193,7 +204,7 @@ class MainActivity : ComponentActivity() {
                                             val y = baseY + waveAmp * sin(
                                                 2.0 * PI * ((x - left) / waveLen + phase)
                                             ).toFloat()
-                                            if (step == 0) lineTo(x, y) else lineTo(x, y)
+                                            lineTo(x, y)
                                         }
                                         lineTo(right, bottom)
                                         close()
@@ -226,13 +237,11 @@ class MainActivity : ComponentActivity() {
                                     center = Offset(hlCx, hlCy)
                                 )
                             }
-
-
                         }
 
                         // Large value exactly at circle center
                         Text(
-                            text = String.format(Locale.US, "%.2fL", currentMl / 1000f),
+                            text = String.format(Locale.US, "%.2fL", selectedMl / 1000f),
                             color = Color.White,
                             fontSize = 44.sp,
                             fontWeight = FontWeight.Bold,
@@ -288,30 +297,33 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(32.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    DayIndicator(
+                        selectedDay = selectedDay,
+                        today = today,
+                        onBackToToday = {
+                            selectedDay = today
+                            refresh()
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(onClick = {
-                            currentMl = WaterRepository.addWater(this@MainActivity, 100)
-                            currentStreak = WaterRepository.getStreak(this@MainActivity)
-                            updateWidget()
-                        }) {
+                        Button(onClick = { add(100) }) {
                             Text("+100ml")
                         }
-                        Button(onClick = {
-                            currentMl = WaterRepository.addWater(this@MainActivity, 250)
-                            currentStreak = WaterRepository.getStreak(this@MainActivity)
-                            updateWidget()
-                        }) {
+                        Button(onClick = { add(250) }) {
                             Text("+250ml")
                         }
                         Button(
                             onClick = {
-                                currentMl = WaterRepository.resetToday(this@MainActivity)
-                                currentStreak = WaterRepository.getStreak(this@MainActivity)
+                                WaterRepository.resetDay(this@MainActivity, selectedDay)
+                                refresh()
                                 updateWidget()
                             },
                             modifier = Modifier.size(44.dp),
@@ -323,7 +335,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
-                                contentDescription = "Reset today",
+                                contentDescription = "Reset selected day",
                                 tint = Color(0xFFFF453A),
                                 modifier = Modifier.size(20.dp)
                             )
@@ -333,8 +345,12 @@ class MainActivity : ComponentActivity() {
                     Spacer(modifier = Modifier.height(24.dp))
 
                     WaterChart(
-                        currentMl = currentMl,
-                        historyVersion = historyVersion,
+                        dataVersion = dataVersion,
+                        selectedIndex = selectedIndex,
+                        onDaySelected = { index ->
+                            selectedDay = today - (lastIndex - index)
+                            refresh()
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(160.dp)
@@ -346,8 +362,22 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        currentMl = WaterRepository.getCurrentMl(this)
+        // Coming back to the app always drops you into today, so a forgotten
+        // day selection can never silently swallow later entries.
+        selectedDay = WaterRepository.today()
+        refresh()
+    }
+
+    private fun add(ml: Int) {
+        WaterRepository.addWaterForDay(this, selectedDay, ml)
+        refresh()
+        updateWidget()
+    }
+
+    private fun refresh() {
+        selectedMl = WaterRepository.getMlForDay(this, selectedDay)
         currentStreak = WaterRepository.getStreak(this)
+        dataVersion++
     }
 
     private fun updateWidget() {
@@ -362,6 +392,53 @@ class MainActivity : ComponentActivity() {
 }
 
 private val DAY_LABELS = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+private val MONTH_LABELS = arrayOf(
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+)
+
+private fun formatDay(epochDay: Long): String {
+    val date = LocalDate.ofEpochDay(epochDay)
+    val weekday = DAY_LABELS[date.dayOfWeek.value - 1]
+    return "$weekday, ${MONTH_LABELS[date.monthValue - 1]} ${date.dayOfMonth}"
+}
+
+/**
+ * Fixed-height strip under the circle telling you which day the buttons write into.
+ * Height is constant so switching days doesn't shift the layout.
+ */
+@Composable
+private fun DayIndicator(selectedDay: Long, today: Long, onBackToToday: () -> Unit) {
+    Box(modifier = Modifier.height(30.dp), contentAlignment = Alignment.Center) {
+        if (selectedDay == today) {
+            Text(
+                text = "Today",
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 13.sp
+            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .background(Color(0xFF3A2A12), RoundedCornerShape(15.dp))
+                    .clickable { onBackToToday() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = formatDay(selectedDay),
+                    color = Color(0xFFFFB74D),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "✕",
+                    color = Color(0xFFFFB74D).copy(alpha = 0.7f),
+                    fontSize = 13.sp
+                )
+            }
+        }
+    }
+}
 
 private fun smoothPath(points: List<Offset>): Path {
     val path = Path()
@@ -381,24 +458,32 @@ private fun smoothPath(points: List<Offset>): Path {
     return path
 }
 
+private val CHART_PAD_LEFT = 36.dp
+private val CHART_PAD_RIGHT = 8.dp
+
 @Composable
-private fun WaterChart(currentMl: Int, historyVersion: Int, modifier: Modifier = Modifier) {
+private fun WaterChart(
+    dataVersion: Int,
+    selectedIndex: Int,
+    onDaySelected: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val textMeasurer = rememberTextMeasurer()
     val blue = Color(0xFF2196F3)
+    val days = WaterRepository.VISIBLE_DAYS
+    val lastIndex = days - 1
 
-    // Last 7 days: index 0 = oldest, index 6 = today
-    // Also compute the 30-day rolling average *before* each visible day for the trend line
-    // historyVersion is included as a key so the cache invalidates after generate/clear operations
-    val (chartData, rollingAverages) = remember(currentMl, historyVersion) {
-        val historyMap = WaterRepository.getHistory(context).toMap()
-        val today = LocalDate.now().toEpochDay()
-        val data = (6 downTo 0).map { daysAgo ->
-            if (daysAgo == 0) currentMl else historyMap[today - daysAgo] ?: 0
-        }
-        val averages = (6 downTo 0).map { daysAgo ->
+    // Index 0 = oldest visible day, last index = today.
+    // Also compute the 30-day rolling average *before* each visible day for the trend line.
+    // dataVersion is the cache key — it changes after every write.
+    val (chartData, rollingAverages) = remember(dataVersion) {
+        val dayMap = WaterRepository.getAllDays(context)
+        val today = WaterRepository.today()
+        val data = (lastIndex downTo 0).map { daysAgo -> dayMap[today - daysAgo] ?: 0 }
+        val averages = (lastIndex downTo 0).map { daysAgo ->
             val dayEpoch = today - daysAgo
-            val values = (1..30).mapNotNull { historyMap[dayEpoch - it] }
+            val values = (1..30).mapNotNull { dayMap[dayEpoch - it] }
             if (values.isEmpty()) 0f else values.average().toFloat()
         }
         Pair(data, averages)
@@ -407,29 +492,46 @@ private fun WaterChart(currentMl: Int, historyVersion: Int, modifier: Modifier =
     // X-axis day labels — only depend on the current date, not history
     val dayLabels: List<String> = remember {
         val today = LocalDate.now()
-        (6 downTo 0).map { daysAgo ->
+        (lastIndex downTo 0).map { daysAgo ->
             DAY_LABELS[today.minusDays(daysAgo.toLong()).dayOfWeek.value - 1]
         }
     }
 
     val labelStyle = TextStyle(color = Color.Gray, fontSize = 10.sp)
+    val selectedLabelStyle = TextStyle(
+        color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold
+    )
 
-    Canvas(modifier = modifier) {
-        val padLeft = 36.dp.toPx()
-        val padBottom = 24.dp.toPx()
-        val padTop = 8.dp.toPx()
-        val padRight = 8.dp.toPx()
-
-        val chartLeft = padLeft
-        val chartRight = size.width - padRight
-        val chartBottom = size.height - padBottom
-        val chartTop = padTop
+    Canvas(
+        modifier = modifier.pointerInput(days) {
+            // The whole vertical slot is the tap target, not just the small label.
+            detectTapGestures { tap ->
+                val chartLeft = CHART_PAD_LEFT.toPx()
+                val chartWidth = size.width - CHART_PAD_RIGHT.toPx() - chartLeft
+                if (chartWidth <= 0f) return@detectTapGestures
+                val index = ((tap.x - chartLeft) / (chartWidth / days)).toInt()
+                if (index in 0..lastIndex) onDaySelected(index)
+            }
+        }
+    ) {
+        val chartLeft = CHART_PAD_LEFT.toPx()
+        val chartRight = size.width - CHART_PAD_RIGHT.toPx()
+        val chartBottom = size.height - 24.dp.toPx()
+        val chartTop = 8.dp.toPx()
         val chartWidth = chartRight - chartLeft
         val chartHeight = chartBottom - chartTop
 
         val maxValue = ((chartData.maxOrNull() ?: 0) + 250).toFloat()
-        val slotWidth = chartWidth / 7f
+        val slotWidth = chartWidth / days
         val barWidth = slotWidth * 0.5f
+
+        // Selection band behind the selected day
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.07f),
+            topLeft = Offset(chartLeft + slotWidth * selectedIndex, chartTop),
+            size = Size(slotWidth, chartHeight),
+            cornerRadius = CornerRadius(6.dp.toPx())
+        )
 
         // Axes
         drawLine(
@@ -512,10 +614,11 @@ private fun WaterChart(currentMl: Int, historyVersion: Int, modifier: Modifier =
             )
         }
 
-        // X-axis day labels
+        // X-axis day labels — the selected one is brighter and bold
         dayLabels.forEachIndexed { i, label ->
+            val style = if (i == selectedIndex) selectedLabelStyle else labelStyle
             val slotCenter = chartLeft + slotWidth * i + slotWidth / 2f
-            val measured = textMeasurer.measure(label, style = labelStyle)
+            val measured = textMeasurer.measure(label, style = style)
             drawText(
                 textMeasurer = textMeasurer,
                 text = label,
@@ -523,9 +626,8 @@ private fun WaterChart(currentMl: Int, historyVersion: Int, modifier: Modifier =
                     slotCenter - measured.size.width / 2f,
                     chartBottom + 4.dp.toPx()
                 ),
-                style = labelStyle
+                style = style
             )
         }
-
     }
 }
