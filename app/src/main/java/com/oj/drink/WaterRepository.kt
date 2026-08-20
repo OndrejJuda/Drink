@@ -11,6 +11,7 @@ object WaterRepository {
     private const val KEY_WATER_ML = "water_ml"
     private const val KEY_DATE = "date"
     private const val KEY_HISTORY = "history"
+    private const val KEY_MAX_STREAK_FLOOR = "max_streak_floor"
     const val DAILY_GOAL_ML = 2000
 
     /** Days of history kept. Generous enough that a long streak is never truncated. */
@@ -36,9 +37,34 @@ object WaterRepository {
         }
     }
 
+    /** Longest run of consecutive days in a sorted, duplicate-free list. */
+    private fun longestRun(days: List<Long>): Int {
+        var best = 0
+        var run = 0
+        var previous: Long? = null
+        for (day in days) {
+            run = if (previous != null && day == previous + 1) run + 1 else 1
+            if (run > best) best = run
+            previous = day
+        }
+        return best
+    }
+
     /** Sorts by day and keeps only the most recent [HISTORY_LIMIT] days before writing. */
     private fun writeEntries(prefs: SharedPreferences, entries: List<Entry>) {
         val sorted = entries.sortedBy { it.day }
+        if (sorted.size > HISTORY_LIMIT) {
+            // Days about to fall out of the window can still hold the all-time record, so it
+            // gets frozen into a floor before they go. Computed from the not-yet-trimmed list
+            // so a streak straddling the cut-off is measured whole, and fake days are left out
+            // so generated test data can never poison the record permanently.
+            val record = longestRun(
+                sorted.filter { !it.fake && it.ml >= DAILY_GOAL_ML }.map { it.day }
+            )
+            if (record > prefs.getInt(KEY_MAX_STREAK_FLOOR, 0)) {
+                prefs.edit().putInt(KEY_MAX_STREAK_FLOOR, record).apply()
+            }
+        }
         val kept = if (sorted.size > HISTORY_LIMIT) sorted.takeLast(HISTORY_LIMIT) else sorted
         val json = JSONArray()
         for (e in kept) {
@@ -123,6 +149,25 @@ object WaterRepository {
             day--
         }
         return streak
+    }
+
+    /**
+     * Longest run of consecutive goal-meeting days ever recorded.
+     *
+     * Recomputed from the data on every call within the history window, so back-filling a
+     * past day can raise it and clearing data lowers it again. Today only participates once
+     * the goal is met, so a day still in progress can never beat the record.
+     *
+     * Records older than the window would otherwise vanish with the trimmed days, so
+     * [writeEntries] stores a floor at trim time and the two are combined here.
+     */
+    fun getMaxStreak(context: Context): Int {
+        val goalDays = getAllDays(context)
+            .filterValues { it >= DAILY_GOAL_ML }
+            .keys
+            .sorted()
+        val floor = prefs(context).getInt(KEY_MAX_STREAK_FLOOR, 0)
+        return maxOf(longestRun(goalDays), floor)
     }
 
     // ----------------------------------------------------------------- writes

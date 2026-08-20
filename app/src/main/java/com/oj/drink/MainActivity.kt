@@ -8,7 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -49,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -57,6 +60,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -80,6 +84,7 @@ class MainActivity : ComponentActivity() {
     private var selectedDay by mutableLongStateOf(WaterRepository.today())
     private var selectedMl by mutableIntStateOf(0)
     private var currentStreak by mutableIntStateOf(0)
+    private var maxStreak by mutableIntStateOf(0)
 
     /** Bumped after every write so the chart's cached data recomputes. */
     private var dataVersion by mutableIntStateOf(0)
@@ -268,33 +273,13 @@ class MainActivity : ComponentActivity() {
                         )
 
                         // Streak badge — overlaps top-right edge of circle
-                        Box(
+                        StreakBadge(
+                            currentStreak = currentStreak,
+                            maxStreak = maxStreak,
                             modifier = Modifier
-                                .size(48.dp)
                                 .align(Alignment.TopEnd)
                                 .offset(x = (-12).dp, y = 12.dp)
-                                .background(Color(0xFF1C1C1E), CircleShape)
-                                .border(
-                                    width = 2.dp,
-                                    color = if (currentStreak > 0) Color(0xFFFF6D00) else Color.DarkGray,
-                                    shape = CircleShape
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Text("🔥", fontSize = 13.sp, lineHeight = 14.sp)
-                                Text(
-                                    text = "$currentStreak",
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    lineHeight = 14.sp
-                                )
-                            }
-                        }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -377,6 +362,7 @@ class MainActivity : ComponentActivity() {
     private fun refresh() {
         selectedMl = WaterRepository.getMlForDay(this, selectedDay)
         currentStreak = WaterRepository.getStreak(this)
+        maxStreak = WaterRepository.getMaxStreak(this)
         dataVersion++
     }
 
@@ -400,6 +386,63 @@ private fun formatDay(epochDay: Long): String {
     val date = LocalDate.ofEpochDay(epochDay)
     val weekday = DAY_LABELS[date.dayOfWeek.value - 1]
     return "$weekday, ${MONTH_LABELS[date.monthValue - 1]} ${date.dayOfMonth}"
+}
+
+private val BADGE_SIZE = 48.dp
+
+/**
+ * Streak badge that flips like a coin when tapped: 🔥 current streak on the front,
+ * 🏆 all-time best on the back. Useful exactly on days like the one where the goal
+ * is already out of reach — the record is still there to look at.
+ *
+ * Only one face is composed at a time; the back is counter-rotated so its text isn't
+ * mirrored. [flipped] is local state, so the badge is always face-up after onResume.
+ */
+@Composable
+private fun StreakBadge(currentStreak: Int, maxStreak: Int, modifier: Modifier = Modifier) {
+    var flipped by remember { mutableStateOf(false) }
+    val rotation by animateFloatAsState(
+        targetValue = if (flipped) 180f else 0f,
+        animationSpec = tween(450, easing = FastOutSlowInEasing),
+        label = "flip"
+    )
+    val showingBack = rotation > 90f
+    val accent = when {
+        showingBack -> Color(0xFFFFC400)
+        currentStreak > 0 -> Color(0xFFFF6D00)
+        else -> Color.DarkGray
+    }
+
+    Box(
+        modifier = modifier
+            .size(BADGE_SIZE)
+            .graphicsLayer {
+                rotationY = rotation
+                // Without this the 48dp badge swings through an extreme perspective
+                // and visibly balloons mid-flip.
+                cameraDistance = 12f * density
+            }
+            .clip(CircleShape)
+            .background(Color(0xFF1C1C1E))
+            .border(width = 2.dp, color = accent, shape = CircleShape)
+            .clickable { flipped = !flipped },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.graphicsLayer { if (showingBack) rotationY = 180f },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(if (showingBack) "🏆" else "🔥", fontSize = 13.sp, lineHeight = 14.sp)
+            Text(
+                text = "${if (showingBack) maxStreak else currentStreak}",
+                color = if (showingBack) accent else Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 14.sp
+            )
+        }
+    }
 }
 
 /**
