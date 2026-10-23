@@ -62,6 +62,7 @@ přes `setImageViewBitmap`.
 | `app/src/main/java/com/oj/drink/WaterRepository.kt` | Veškerá persistence. Jediný zdroj pravdy. |
 | `app/src/main/java/com/oj/drink/MainActivity.kt` | Celá UI appky včetně `WaterChart` — jeden soubor. |
 | `app/src/main/java/com/oj/drink/WaterWidget.kt` | Widget provider + vykreslení bitmapy. |
+| `app/src/main/java/com/oj/drink/Reminders.kt` | Notifikace „jsi pozadu“ — tempo, sloty, alarmy, `ReminderReceiver`. |
 | `app/src/main/res/layout/widget_water.xml` | Layout widgetu (50/50 split kolečko / tlačítko). |
 | `app/src/main/res/xml/water_widget_info.xml` | Rozměry widgetu — 1×2, `resizeMode="none"`. |
 
@@ -74,6 +75,7 @@ přes `setImageViewBitmap`.
 - `history` — JSON pole `{day, ml, fake}`, seřazené podle dne a ořezané na posledních
   **400** dnů (`HISTORY_LIMIT`)
 - `max_streak_floor` — jediný odvozený údaj, který se ukládá; viz níže
+- `last_add_at` — čas posledního kladného přidání do dneška (ms); jen kvůli notifikacím
 
 Denní cíl je konstanta `WaterRepository.DAILY_GOAL_ML = 2000`. Streak se **neukládá**, počítá se.
 
@@ -112,6 +114,22 @@ Kolečko, tlačítka i reset pak míří na vybraný den; widget vždycky ukazuj
 v grafu bílý a tučný + má podkladový pruh, a pod kolečkem je proužek `DayIndicator` s datem a ✕
 pro návrat na dnešek. Výběr se resetuje na dnešek v `onResume()`, takže nemůže přežít odchod
 z appky. Rozsah je posledních `VISIBLE_DAYS` (7) dnů.
+
+## Notifikace
+
+`Reminders.kt`. Očekávaný příjem je po částech lineární podle `PACE`: 6:00 → 0, **13:00 → 1,5 L**,
+21:00 → 2 L. Kontroly běží ve slotech `SLOTS` (8–13 každou hodinu, pak 15, 17, 19, 20:30) a
+notifikace přijde, jen když je skluz větší než `TOLERANCE_ML` (100 ml). Běžná kontrola se přeskočí,
+pokud se za posledních 45 min něco přidalo; milník ve 13:00 a kontrola ve 20:30 (ohrožený streak,
+když nějaký je) ne. Po splnění cíle nechodí nic. Akce `+250 ml` v notifikaci přidá do dneška.
+
+- **Alarmy se řetězí.** Každá kontrola naplánuje další slot přes `setWindow` s 10min oknem —
+  přesné alarmy by chtěly `SCHEDULE_EXACT_ALARM` a obyčejný nepřesný alarm Samsung roztáhl na
+  víc než hodinu. Alarm opožděný o víc než 60 min se jen přeplánuje. Řetěz restartuje boot,
+  změna času/zóny, update appky (`MY_PACKAGE_REPLACED`) a každé spuštění `MainActivity`.
+- Přidání vody z appky, widgetu i notifikace volá `Reminders.onWaterAdded`, které zastaralou
+  notifikaci schová, když už nejsi pozadu.
+- Dev menu má „Run reminder check now“ — spustí kontrolu, jako by teď byl slot.
 
 ## Dev menu
 

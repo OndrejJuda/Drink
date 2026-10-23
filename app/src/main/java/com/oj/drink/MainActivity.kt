@@ -2,8 +2,12 @@ package com.oj.drink
 
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
@@ -89,8 +93,17 @@ class MainActivity : ComponentActivity() {
     /** Bumped after every write so the chart's cached data recomputes. */
     private var dataVersion by mutableIntStateOf(0)
 
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        Reminders.scheduleNext(this)
         refresh()
         setContent {
             DrinkTheme {
@@ -144,6 +157,16 @@ class MainActivity : ComponentActivity() {
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) { Text("Clear fake data only") }
+                                TextButton(
+                                    onClick = {
+                                        Reminders.runCheck(
+                                            this@MainActivity,
+                                            java.time.LocalTime.now().toSecondOfDay()
+                                        )
+                                        showDevDialog = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Run reminder check now") }
                                 TextButton(
                                     onClick = {
                                         WaterRepository.clearAllData(this@MainActivity)
@@ -357,6 +380,7 @@ class MainActivity : ComponentActivity() {
         WaterRepository.addWaterForDay(this, selectedDay, ml)
         refresh()
         updateWidget()
+        Reminders.onWaterAdded(this)
     }
 
     private fun refresh() {

@@ -22,6 +22,16 @@ class WaterWidget : AppWidgetProvider() {
     companion object {
         const val ACTION_ADD_250 = "com.oj.drink.ADD_250"
         private const val BITMAP_SIZE = 120
+
+        /** Asks every placed widget to redraw from the repository. */
+        fun requestUpdate(context: Context) {
+            val ids = AppWidgetManager.getInstance(context)
+                .getAppWidgetIds(ComponentName(context, WaterWidget::class.java))
+            context.sendBroadcast(Intent(context, WaterWidget::class.java).apply {
+                action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+            })
+        }
     }
 
     override fun onUpdate(
@@ -39,6 +49,7 @@ class WaterWidget : AppWidgetProvider() {
         if (intent.action == ACTION_ADD_250) {
             WaterRepository.addWater(context, 250)
             updateAllWidgets(context)
+            Reminders.onWaterAdded(context)
         }
     }
 

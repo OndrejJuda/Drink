@@ -12,6 +12,7 @@ object WaterRepository {
     private const val KEY_DATE = "date"
     private const val KEY_HISTORY = "history"
     private const val KEY_MAX_STREAK_FLOOR = "max_streak_floor"
+    private const val KEY_LAST_ADD_AT = "last_add_at"
     const val DAILY_GOAL_ML = 2000
 
     /** Days of history kept. Generous enough that a long streak is never truncated. */
@@ -170,6 +171,9 @@ object WaterRepository {
         return maxOf(longestRun(goalDays), floor)
     }
 
+    /** Wall-clock millis of the last positive add to today, or 0. Used to hold back reminders. */
+    fun getLastAddAt(context: Context): Long = prefs(context).getLong(KEY_LAST_ADD_AT, 0L)
+
     // ----------------------------------------------------------------- writes
 
     fun addWater(context: Context, ml: Int): Int = addWaterForDay(context, today(), ml)
@@ -183,7 +187,9 @@ object WaterRepository {
 
         return if (day == today) {
             val newValue = (p.getInt(KEY_WATER_ML, 0) + ml).coerceAtLeast(0)
-            p.edit().putInt(KEY_WATER_ML, newValue).apply()
+            val edit = p.edit().putInt(KEY_WATER_ML, newValue)
+            if (ml > 0) edit.putLong(KEY_LAST_ADD_AT, System.currentTimeMillis())
+            edit.apply()
             newValue
         } else {
             val current = readEntries(p).firstOrNull { it.day == day }?.ml ?: 0
